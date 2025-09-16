@@ -168,6 +168,46 @@
       </div>
     </div>
 
+    <!-- Batch Operations Modal -->
+    <div id="batch-modal" class="modal hidden">
+      <div class="modal-content">
+        <span class="close-batch-modal">&times;</span>
+        <h3 id="batch-modal-title">Manage Students</h3>
+        <div id="batch-operation-type" class="form-group">
+          <label>Operation:</label>
+          <select id="operation-select">
+            <option value="signup">Register Students</option>
+            <option value="unregister">Unregister Students</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="student-search">Search Students:</label>
+          <input
+            type="text"
+            id="student-search"
+            placeholder="Type to search students..."
+          />
+        </div>
+        <div class="form-group">
+          <label>Select Students:</label>
+          <div id="student-list" class="student-selection">
+            <!-- Students will be loaded here -->
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Selected Students (<span id="selected-count">0</span>):</label>
+          <div id="selected-students" class="selected-students">
+            <!-- Selected students will appear here -->
+          </div>
+        </div>
+        <input type="hidden" id="batch-activity" value="" />
+        <div class="modal-actions">
+          <button type="button" id="batch-cancel" class="cancel-btn">Cancel</button>
+          <button type="button" id="batch-submit" class="confirm-btn">Apply Changes</button>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>

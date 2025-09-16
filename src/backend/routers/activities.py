@@ -5,6 +5,7 @@ Endpoints for the High School Management System API
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from typing import Dict, Any, Optional, List
+from pydantic import BaseModel
 
 from ..database import activities_collection, teachers_collection
 
@@ -12,6 +13,11 @@ router = APIRouter(
     prefix="/activities",
     tags=["activities"]
 )
+
+# Request models for batch operations
+class BatchStudentOperation(BaseModel):
+    emails: List[str]
+    teacher_username: str
 
 @router.get("", response_model=Dict[str, Any])
 @router.get("/", response_model=Dict[str, Any])
@@ -62,6 +68,22 @@ def get_available_days() -> List[str]:
         days.append(day_doc["_id"])
     
     return days
+
+@router.get("/students", response_model=List[str])
+def get_all_students() -> List[str]:
+    """Get a list of all student emails from all activities"""
+    # Aggregate to get unique student emails across all activities
+    pipeline = [
+        {"$unwind": "$participants"},
+        {"$group": {"_id": "$participants"}},
+        {"$sort": {"_id": 1}}  # Sort emails alphabetically
+    ]
+    
+    students = []
+    for student_doc in activities_collection.aggregate(pipeline):
+        students.append(student_doc["_id"])
+    
+    return students
 
 @router.post("/{activity_name}/signup")
 def signup_for_activity(activity_name: str, email: str, teacher_username: Optional[str] = Query(None)):
@@ -126,3 +148,79 @@ def unregister_from_activity(activity_name: str, email: str, teacher_username: O
         raise HTTPException(status_code=500, detail="Failed to update activity")
     
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+@router.post("/{activity_name}/batch-signup")
+def batch_signup_for_activity(activity_name: str, request: BatchStudentOperation):
+    """Sign up multiple students for an activity - requires teacher authentication"""
+    # Check teacher authentication
+    teacher = teachers_collection.find_one({"_id": request.teacher_username})
+    if not teacher:
+        raise HTTPException(status_code=401, detail="Invalid teacher credentials")
+    
+    # Get the activity
+    activity = activities_collection.find_one({"_id": activity_name})
+    if not activity:
+        raise HTTPException(status_code=404, detail="Activity not found")
+
+    # Validate max participants wouldn't be exceeded
+    current_participants = len(activity["participants"])
+    new_students = [email for email in request.emails if email not in activity["participants"]]
+    
+    if current_participants + len(new_students) > activity["max_participants"]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot add {len(new_students)} students. Activity capacity is {activity['max_participants']}, currently has {current_participants} participants."
+        )
+
+    # Add students to participants (only those not already registered)
+    if new_students:
+        result = activities_collection.update_one(
+            {"_id": activity_name},
+            {"$addToSet": {"participants": {"$each": new_students}}}
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update activity")
+    
+    already_registered = [email for email in request.emails if email in activity["participants"]]
+    
+    return {
+        "message": f"Batch signup completed for {activity_name}",
+        "added": new_students,
+        "already_registered": already_registered,
+        "total_participants": current_participants + len(new_students)
+    }
+
+@router.post("/{activity_name}/batch-unregister")  
+def batch_unregister_from_activity(activity_name: str, request: BatchStudentOperation):
+    """Remove multiple students from an activity - requires teacher authentication"""
+    # Check teacher authentication
+    teacher = teachers_collection.find_one({"_id": request.teacher_username})
+    if not teacher:
+        raise HTTPException(status_code=401, detail="Invalid teacher credentials")
+    
+    # Get the activity
+    activity = activities_collection.find_one({"_id": activity_name})
+    if not activity:
+        raise HTTPException(status_code=404, detail="Activity not found")
+
+    # Find which students are actually registered
+    students_to_remove = [email for email in request.emails if email in activity["participants"]]
+    not_registered = [email for email in request.emails if email not in activity["participants"]]
+
+    # Remove students from participants
+    if students_to_remove:
+        result = activities_collection.update_one(
+            {"_id": activity_name},
+            {"$pullAll": {"participants": students_to_remove}}
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update activity")
+    
+    return {
+        "message": f"Batch unregister completed for {activity_name}",
+        "removed": students_to_remove,
+        "not_registered": not_registered,
+        "remaining_participants": len(activity["participants"]) - len(students_to_remove)
+    }
