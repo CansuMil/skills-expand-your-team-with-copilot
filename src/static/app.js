@@ -561,6 +561,9 @@ document.addEventListener("DOMContentLoaded", () => {
               }>
             ${isFull ? "Activity Full" : "Register Student"}
           </button>
+          <button class="batch-manage-btn" data-activity="${name}">
+            Batch Manage
+          </button>
         `
             : `
           <div class="auth-notice">
@@ -585,6 +588,12 @@ document.addEventListener("DOMContentLoaded", () => {
           openRegistrationModal(name);
         });
       }
+      
+      // Add click handler for batch manage button
+      const batchButton = activityCard.querySelector(".batch-manage-btn");
+      batchButton.addEventListener("click", () => {
+        openBatchModal(name);
+      });
     }
 
     activitiesList.appendChild(activityCard);
@@ -861,8 +870,176 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeRangeFilter,
   };
 
+  // Batch operations functionality
+  const batchModal = document.getElementById("batch-modal");
+  const closeBatchModal = document.querySelector(".close-batch-modal");
+  const batchCancel = document.getElementById("batch-cancel");
+  const batchSubmit = document.getElementById("batch-submit");
+  const batchActivity = document.getElementById("batch-activity");
+  const operationSelect = document.getElementById("operation-select");
+  const studentSearch = document.getElementById("student-search");
+  const studentList = document.getElementById("student-list");
+  const selectedStudents = document.getElementById("selected-students");
+  const selectedCount = document.getElementById("selected-count");
+  
+  let allStudents = [];
+  let selectedStudentEmails = new Set();
+  
+  // Load all students when authenticated
+  async function loadAllStudents() {
+    if (!currentUser) return;
+    
+    try {
+      const response = await fetch("/activities/students");
+      if (response.ok) {
+        allStudents = await response.json();
+      }
+    } catch (error) {
+      console.error("Error loading students:", error);
+    }
+  }
+
+  function openBatchModal(activityName) {
+    if (!currentUser) {
+      showMessage("You must be logged in as a teacher to manage students.", "error");
+      return;
+    }
+    
+    batchActivity.value = activityName;
+    document.getElementById("batch-modal-title").textContent = `Manage Students - ${activityName}`;
+    selectedStudentEmails.clear();
+    updateSelectedStudentsDisplay();
+    updateStudentList();
+    batchModal.classList.remove("hidden");
+    batchModal.classList.add("show");
+  }
+
+  function closeBatchModalHandler() {
+    batchModal.classList.remove("show");
+    setTimeout(() => {
+      batchModal.classList.add("hidden");
+      selectedStudentEmails.clear();
+      studentSearch.value = "";
+    }, 300);
+  }
+
+  function updateStudentList() {
+    const searchTerm = studentSearch.value.toLowerCase();
+    const filteredStudents = allStudents.filter(email => 
+      email.toLowerCase().includes(searchTerm)
+    );
+    
+    studentList.innerHTML = filteredStudents.map(email => `
+      <div class="student-item" data-email="${email}">
+        <input type="checkbox" class="student-checkbox" ${selectedStudentEmails.has(email) ? 'checked' : ''}>
+        <span>${email}</span>
+      </div>
+    `).join("");
+    
+    // Add click handlers for student items
+    studentList.querySelectorAll('.student-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        if (e.target.type !== 'checkbox') {
+          const checkbox = item.querySelector('.student-checkbox');
+          checkbox.checked = !checkbox.checked;
+        }
+        toggleStudentSelection(item.dataset.email, item.querySelector('.student-checkbox').checked);
+      });
+    });
+  }
+
+  function toggleStudentSelection(email, selected) {
+    if (selected) {
+      selectedStudentEmails.add(email);
+    } else {
+      selectedStudentEmails.delete(email);
+    }
+    updateSelectedStudentsDisplay();
+  }
+
+  function updateSelectedStudentsDisplay() {
+    selectedCount.textContent = selectedStudentEmails.size;
+    selectedStudents.innerHTML = Array.from(selectedStudentEmails).map(email => `
+      <span class="selected-student-tag" data-email="${email}">
+        ${email} ✕
+      </span>
+    `).join("");
+    
+    // Add click handlers to remove tags
+    selectedStudents.querySelectorAll('.selected-student-tag').forEach(tag => {
+      tag.addEventListener('click', () => {
+        const email = tag.dataset.email;
+        selectedStudentEmails.delete(email);
+        updateSelectedStudentsDisplay();
+        updateStudentList(); // Refresh to uncheck the checkbox
+      });
+    });
+  }
+
+  async function submitBatchOperation() {
+    if (selectedStudentEmails.size === 0) {
+      showMessage("Please select at least one student.", "error");
+      return;
+    }
+    
+    const activityName = batchActivity.value;
+    const operation = operationSelect.value;
+    const emails = Array.from(selectedStudentEmails);
+    
+    try {
+      const endpoint = operation === "signup" ? "batch-signup" : "batch-unregister";
+      const response = await fetch(`/activities/${encodeURIComponent(activityName)}/${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          emails: emails,
+          teacher_username: currentUser.username
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        const actionWord = operation === "signup" ? "registered" : "unregistered";
+        let message = result.message;
+        
+        if (operation === "signup" && result.already_registered.length > 0) {
+          message += ` (${result.already_registered.length} already registered)`;
+        } else if (operation === "unregister" && result.not_registered.length > 0) {
+          message += ` (${result.not_registered.length} not registered)`;
+        }
+        
+        showMessage(message, "success");
+        closeBatchModalHandler();
+        fetchActivities(); // Refresh activities to show changes
+      } else {
+        showMessage(result.detail || "An error occurred", "error");
+      }
+    } catch (error) {
+      showMessage("Failed to process batch operation. Please try again.", "error");
+      console.error("Error in batch operation:", error);
+    }
+  }
+
+  // Event listeners for batch modal
+  closeBatchModal.addEventListener("click", closeBatchModalHandler);
+  batchCancel.addEventListener("click", closeBatchModalHandler);
+  batchSubmit.addEventListener("click", submitBatchOperation);
+  
+  studentSearch.addEventListener("input", updateStudentList);
+  
+  // Close modal when clicking outside
+  window.addEventListener("click", (event) => {
+    if (event.target === batchModal) {
+      closeBatchModalHandler();
+    }
+  });
+
   // Initialize app
   checkAuthentication();
   initializeFilters();
   fetchActivities();
+  loadAllStudents();
 });
